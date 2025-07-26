@@ -77,9 +77,6 @@ COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/Rapi
 # Make it executable
 RUN chmod +x /usr/local/bin/rapidraw
 
-# Copy any .deb packages if they were created
-COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/*.deb /tmp/ || true
-
 # Expose port (adjust based on your app's configuration)
 EXPOSE 3000
 
