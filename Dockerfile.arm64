@@ -44,8 +44,12 @@ COPY . .
 # Install frontend dependencies
 RUN npm install
 
-# Build the application
-RUN npx tauri build --target aarch64-unknown-linux-gnu
+# Build the application (skip AppImage for ARM64)
+ENV NO_STRIP=true
+RUN npx tauri build --target aarch64-unknown-linux-gnu -- --no-default-features
+
+# Debug: List the output directory to find the correct binary name
+RUN ls -la /app/src-tauri/target/aarch64-unknown-linux-gnu/release/
 
 # Runtime stage
 FROM ubuntu:24.04
@@ -67,12 +71,14 @@ RUN apt-get update && \
     gstreamer1.0-libav \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy built application
-COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/rapid-raw /usr/local/bin/
-COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/*.deb /tmp/
+# Copy built application (use the correct binary name - RapidRAW with capital letters)
+COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/RapidRAW /usr/local/bin/rapidraw
 
-# Install the .deb package (optional, if you prefer package installation)
-# RUN dpkg -i /tmp/*.deb || apt-get install -f -y
+# Make it executable
+RUN chmod +x /usr/local/bin/rapidraw
+
+# Copy any .deb packages if they were created
+COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/*.deb /tmp/ || true
 
 # Expose port (adjust based on your app's configuration)
 EXPOSE 3000
@@ -81,4 +87,4 @@ EXPOSE 3000
 ENV DISPLAY=:0
 
 # Run the application
-CMD ["/usr/local/bin/rapid-raw"]
+CMD ["/usr/local/bin/rapidraw"]
