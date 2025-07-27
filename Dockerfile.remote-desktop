@@ -1,7 +1,52 @@
 # Complete Remote Desktop Solution for RapidRAW
-FROM rapidraw:arm64 AS rapidraw-binary
+# Single Dockerfile that builds everything from scratch
 
-# Final stage with full desktop environment
+# Stage 1: Build RapidRAW
+FROM rust:latest AS builder
+
+# Install ARM64-specific dependencies
+RUN apt-get update && \
+    apt-get install -y \
+    libwebkit2gtk-4.1-dev \
+    build-essential \
+    curl \
+    wget \
+    file \
+    libssl-dev \
+    libgtk-3-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
+    libasound2-dev \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js for frontend build
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs
+
+# Add ARM64 Rust target
+RUN rustup target add aarch64-unknown-linux-gnu
+
+# Install Tauri CLI
+RUN cargo install tauri-cli
+
+# Set working directory
+WORKDIR /app
+
+# Copy source files
+COPY . .
+
+# Install frontend dependencies
+RUN npm install
+
+# Build the application
+RUN npx tauri build --target aarch64-unknown-linux-gnu
+
+# Stage 2: Create the remote desktop environment
 FROM ubuntu:24.04
 
 # Install full desktop environment and remote access tools
@@ -11,7 +56,7 @@ RUN apt-get update && \
     xfce4 \
     xfce4-terminal \
     dbus-x11 \
-    # RapidRAW dependencies
+    # RapidRAW runtime dependencies
     libwebkit2gtk-4.1-0 \
     libgtk-3-0 \
     libayatana-appindicator3-1 \
@@ -35,8 +80,9 @@ RUN apt-get update && \
     nano \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy RapidRAW binary
-COPY --from=rapidraw-binary /usr/local/bin/rapidraw /usr/local/bin/rapidraw
+# Copy RapidRAW binary from builder stage
+COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/RapidRAW /usr/local/bin/rapidraw
+RUN chmod +x /usr/local/bin/rapidraw
 
 # Set up VNC password (you can change this)
 RUN mkdir -p /root/.vnc && \
@@ -57,6 +103,64 @@ RUN mkdir -p /root/.vnc && \
 unset SESSION_MANAGER\n\
 unset DBUS_SESSION_BUS_ADDRESS\n\
 # Start XFCE desktop\n\
+startxfce4 &\n\
+# Wait for desktop to start\n\
+sleep 5\n\
+# Start RapidRAW automatically\n\
+/usr/local/bin/rapidraw &' > /root/.vnc/xstartup && \
+    chmod +x /root/.vnc/xstartup
+
+# Setup supervisor configuration for all services
+RUN echo '[supervisord]\n\
+nodaemon=true\n\
+logfile=/var/log/supervisor/supervisord.log\n\
+\n\
+[program:vnc]\n\
+command=/root/start-vnc.sh\n\
+autorestart=true\n\
+user=root\n\
+priority=100\n\
+stderr_logfile=/var/log/supervisor/vnc.err.log\n\
+stdout_logfile=/var/log/supervisor/vnc.out.log\n\
+\n\
+[program:novnc]\n\
+command=/usr/share/novnc/utils/novnc_proxy --vnc localhost:5901 --listen 6080\n\
+autorestart=true\n\
+user=root\n\
+priority=200\n\
+stderr_logfile=/var/log/supervisor/novnc.err.log\n\
+stdout_logfile=/var/log/supervisor/novnc.out.log' > /etc/supervisor/conf.d/remote-desktop.conf
+
+# Create a desktop entry for RapidRAW
+RUN mkdir -p /root/Desktop && \
+    echo '[Desktop Entry]\n\
+Version=1.0\n\
+Type=Application\n\
+Name=RapidRAW\n\
+Comment=RAW Photo Editor\n\
+Exec=/usr/local/bin/rapidraw\n\
+Icon=applications-graphics\n\
+Terminal=false\n\
+Categories=Graphics;Photography;' > /root/Desktop/RapidRAW.desktop && \
+    chmod +x /root/Desktop/RapidRAW.desktop
+
+# Expose ports
+# 5901 - VNC direct access
+# 6080 - noVNC web access
+EXPOSE 5901 6080
+
+# Set environment variables
+ENV USER=root \
+    DISPLAY=:1 \
+    VNC_RESOLUTION=1920x1080 \
+    VNC_COL_DEPTH=24
+
+# Add a healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:6080/ || exit 1
+
+# Start supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"] XFCE desktop\n\
 startxfce4 &\n\
 # Wait for desktop to start\n\
 sleep 5\n\
