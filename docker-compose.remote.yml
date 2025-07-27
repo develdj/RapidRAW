@@ -16,10 +16,10 @@ services:
       - VNC_RESOLUTION=1920x1080
       - VNC_COL_DEPTH=24
       - VNC_PASSWORD=rapidraw
-    # For GPU acceleration on Jetson
-    runtime: nvidia
-    devices:
-      - /dev/dri:/dev/dri
+    # For GPU acceleration on Jetson (optional - remove if causes issues)
+    # runtime: nvidia
+    # devices:
+    #   - /dev/dri:/dev/dri
     # Better performance
     shm_size: '2gb'
     # Store desktop settings persistently
