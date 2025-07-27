@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  rapidraw-desktop:
+    build:
+      context: .
+      dockerfile: Dockerfile.remote-desktop
+    container_name: rapidraw-remote-desktop
+    ports:
+      # Web-based access (recommended)
+      - "6080:6080"
+      # Direct VNC access (optional, for VNC clients)
+      - "5901:5901"
+    restart: unless-stopped
+    environment:
+      - VNC_RESOLUTION=1920x1080
+      - VNC_COL_DEPTH=24
+      - VNC_PASSWORD=rapidraw
+    # For GPU acceleration on Jetson
+    runtime: nvidia
+    devices:
+      - /dev/dri:/dev/dri
+    # Better performance
+    shm_size: '2gb'
+    # Store desktop settings persistently
+    volumes:
+      - rapidraw-desktop:/root
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+
+volumes:
+  rapidraw-desktop:
+    driver: local
