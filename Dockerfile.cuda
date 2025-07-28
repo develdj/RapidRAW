@@ -1,5 +1,16 @@
 # CUDA-OPTIMIZED RAPIDRAW BUILD FOR JETSON AGX ORIN
 # Complete standalone Dockerfile - no external configs needed
+# CUDA + GPU Acceleration + VNC Remote Desktop
+
+# Stage 1: Build environment with CUDA support
+FROM nvcr.io/nvidia/l4t-cuda:12.2.12-devel AS builder
+
+# Install build dependencies with GPU support
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools
+    build-essential cmake ninja-build pkg-config \
+    cl# CUDA-OPTIMIZED RAPIDRAW BUILD FOR JETSON AGX ORIN
+# Complete standalone Dockerfile - no external configs needed
 # CUDA 12.8 + GPU Acceleration + VNC Remote Desktop
 
 # Stage 1: Build environment with CUDA support
