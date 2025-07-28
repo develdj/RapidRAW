@@ -3,24 +3,19 @@
 # CUDA + GPU Acceleration + VNC Remote Desktop
 
 # Stage 1: Build environment with CUDA support
-FROM nvcr.io/nvidia/l4t-cuda:12.2.12-devel AS builder
+FROM dustynv/cuda-python:r36.4.0-cu128-24.04 AS builder
+
+# Clear any problematic environment variables from base image
+ENV RUSTFLAGS="" \
+    CARGO_PROFILE_RELEASE_LTO="" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="3" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="1"
 
 # Install build dependencies with GPU support
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Build tools
     build-essential cmake ninja-build pkg-config \
-    cl# CUDA-OPTIMIZED RAPIDRAW BUILD FOR JETSON AGX ORIN
-# Complete standalone Dockerfile - no external configs needed
-# CUDA 12.8 + GPU Acceleration + VNC Remote Desktop
-
-# Stage 1: Build environment with CUDA support
-FROM dustynv/cuda:12.8-devel-ubuntu24.04 AS builder
-
-# Install build dependencies with GPU support
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Build tools
-    build-essential cmake ninja-build pkg-config \
-    clang-18 lld-18 ccache \
+    gcc g++ \
     # Rust dependencies
     curl ca-certificates \
     # GUI dependencies
@@ -38,20 +33,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libvulkan-dev \
     libxkbcommon-dev \
     libwayland-dev \
-    # Git for dependencies
+    # Git and SSL
     git \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set performance-oriented build environment
-ENV CC=clang-18 \
-    CXX=clang++-18 \
-    LD=lld-18 \
-    RUSTFLAGS="-C target-cpu=cortex-a78 -C opt-level=3 -C lto=thin" \
-    CARGO_PROFILE_RELEASE_OPT_LEVEL=3 \
-    CARGO_PROFILE_RELEASE_LTO="thin" \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
-
-# Install Rust
+# Install Rust with clean environment
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 ENV PATH="/root/.cargo/bin:${PATH}"
 
@@ -62,20 +49,20 @@ RUN rustup target add aarch64-unknown-linux-gnu
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs
 
-# Install Tauri CLI
-RUN cargo install tauri-cli --locked
+# Install Tauri CLI via npm to avoid cargo compilation issues
+RUN npm install -g @tauri-apps/cli
 
 WORKDIR /app
 COPY . .
 
 # Install frontend dependencies
-RUN npm ci --prefer-offline --no-audit
+RUN npm install
 
-# Build RapidRAW
-RUN npm run tauri build -- --target aarch64-unknown-linux-gnu
+# Build RapidRAW using npx
+RUN npx tauri build --target aarch64-unknown-linux-gnu
 
 # Stage 2: Runtime with CUDA and Remote Desktop
-FROM dustynv/cuda:12.8-runtime-ubuntu24.04
+FROM dustynv/cuda-python:r36.4.0-cu128-24.04
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
