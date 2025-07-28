@@ -1,14 +1,12 @@
 # CUDA-OPTIMIZED RAPIDRAW BUILD FOR JETSON AGX ORIN
-# CUDA 12.8 + GPU Acceleration + Maximum Performance
-# Optimized for 64GB AGX Orin with Ampere GPU
+# Complete standalone Dockerfile - no external configs needed
+# CUDA 12.8 + GPU Acceleration + VNC Remote Desktop
 
 # Stage 1: Build environment with CUDA support
 FROM dustynv/cuda:12.8-devel-ubuntu24.04 AS builder
 
 # Install build dependencies with GPU support
-RUN --mount=type=cache,target=/var/cache/apt \
-    --mount=type=cache,target=/var/lib/apt \
-    apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     # Build tools
     build-essential cmake ninja-build pkg-config \
     clang-18 lld-18 ccache \
@@ -19,30 +17,16 @@ RUN --mount=type=cache,target=/var/cache/apt \
     libgtk-3-dev \
     libayatana-appindicator3-dev \
     librsvg2-dev \
-    # Audio/Video with CUDA support
+    # Audio/Video
     libasound2-dev \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly \
-    gstreamer1.0-libav \
-    gstreamer1.0-vaapi \
-    # GPU compute libraries
+    # GPU libraries
     libvulkan-dev \
     libxkbcommon-dev \
     libwayland-dev \
-    libxrandr-dev \
-    libxi-dev \
-    libxxf86vm-dev \
-    mesa-common-dev \
-    libegl1-mesa-dev \
-    libgles2-mesa-dev \
-    # Performance libraries
-    libomp-18-dev \
-    libnuma-dev \
-    libopenblas-dev \
     # Git for dependencies
     git \
     && rm -rf /var/lib/apt/lists/*
@@ -51,68 +35,42 @@ RUN --mount=type=cache,target=/var/cache/apt \
 ENV CC=clang-18 \
     CXX=clang++-18 \
     LD=lld-18 \
-    RUSTFLAGS="-C target-cpu=cortex-a78 -C opt-level=3 -C lto=thin -C embed-bitcode=yes" \
+    RUSTFLAGS="-C target-cpu=cortex-a78 -C opt-level=3 -C lto=thin" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL=3 \
     CARGO_PROFILE_RELEASE_LTO="thin" \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
-    CARGO_PROFILE_RELEASE_PANIC="abort" \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 
-# Install Rust with ARM64 optimizations
+# Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Add ARM64 target with CUDA support
-RUN rustup target add aarch64-unknown-linux-gnu && \
-    rustup component add rust-src
+# Add ARM64 target
+RUN rustup target add aarch64-unknown-linux-gnu
 
-# Install Node.js for frontend
+# Install Node.js
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs
 
 # Install Tauri CLI
 RUN cargo install tauri-cli --locked
 
-# Set working directory
 WORKDIR /app
-
-# Copy source files
 COPY . .
-
-# Configure for GPU acceleration
-RUN echo '[env]\n\
-WGPU_BACKEND = "vulkan"\n\
-RUST_LOG = "wgpu=info"\n\
-\n\
-[build]\n\
-target = "aarch64-unknown-linux-gnu"\n\
-\n\
-[target.aarch64-unknown-linux-gnu]\n\
-linker = "clang-18"\n\
-rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=cortex-a78"]' > .cargo/config.toml
 
 # Install frontend dependencies
 RUN npm ci --prefer-offline --no-audit
 
-# Build with GPU optimizations
-RUN TAURI_PRIVATE_KEY="" \
-    TAURI_KEY_PASSWORD="" \
-    NO_STRIP=false \
-    WEBKIT_DISABLE_COMPOSITING_MODE=1 \
-    npm run tauri build -- \
-    --target aarch64-unknown-linux-gnu \
-    --features gpu-acceleration
+# Build RapidRAW
+RUN npm run tauri build -- --target aarch64-unknown-linux-gnu
 
-# Stage 2: Remote Desktop Runtime with CUDA
+# Stage 2: Runtime with CUDA and Remote Desktop
 FROM dustynv/cuda:12.8-runtime-ubuntu24.04
 
-# Install runtime dependencies with GPU support
-RUN --mount=type=cache,target=/var/cache/apt \
-    --mount=type=cache,target=/var/lib/apt \
-    apt-get update && apt-get install -y --no-install-recommends \
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     # Desktop environment
     xfce4 xfce4-terminal dbus-x11 \
-    # RapidRAW runtime with GPU
+    # RapidRAW runtime
     libwebkit2gtk-4.1-0 \
     libgtk-3-0 \
     libayatana-appindicator3-1 \
@@ -122,25 +80,23 @@ RUN --mount=type=cache,target=/var/cache/apt \
     libgstreamer-plugins-base1.0-0 \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly \
-    gstreamer1.0-libav \
-    gstreamer1.0-vaapi \
     # Vulkan runtime
     libvulkan1 \
     mesa-vulkan-drivers \
     # VNC server
     tigervnc-standalone-server \
     tigervnc-common \
-    novnc websockify \
+    novnc \
+    websockify \
     # System tools
-    supervisor curl sudo nano htop nvtop \
-    # Performance tools
-    libomp-18-0 libnuma1 libopenblas0 \
+    supervisor \
+    curl \
+    sudo \
+    net-tools \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create optimized user environment
+# Create user
 RUN useradd -m -s /bin/bash -G sudo,video,render ai && \
     echo "ai:ai" | chpasswd && \
     echo "ai ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
@@ -153,133 +109,100 @@ RUN mkdir -p /home/ai/Pictures /home/ai/.vnc /var/log/supervisor && \
 COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/RapidRAW /usr/local/bin/rapidraw
 RUN chmod +x /usr/local/bin/rapidraw
 
-# Configure VNC for noVNC access
+# Configure VNC as user ai
 USER ai
 WORKDIR /home/ai
 
-RUN echo "SecurityTypes=None" > /home/ai/.vnc/config && \
-    touch /home/ai/.vnc/passwd && \
-    chmod 600 /home/ai/.vnc/passwd
+# VNC configuration
+RUN mkdir -p /home/ai/.vnc && \
+    echo "" | vncpasswd -f > /home/ai/.vnc/passwd && \
+    chmod 600 /home/ai/.vnc/passwd && \
+    echo "SecurityTypes=None" > /home/ai/.vnc/config
 
-# XFCE startup with GPU acceleration
-RUN echo '#!/bin/bash\n\
+# XFCE startup script
+RUN echo '#!/bin/sh\n\
+unset SESSION_MANAGER\n\
+unset DBUS_SESSION_BUS_ADDRESS\n\
 xrdb $HOME/.Xresources\n\
-xsetroot -solid "#2D2D2D"\n\
+xsetroot -solid grey\n\
 export XKL_XMODMAP_DISABLE=1\n\
 export QT_X11_NO_MITSHM=1\n\
-export __GL_SYNC_TO_VBLANK=0\n\
-export __GL_YIELD="NOTHING"\n\
 export WGPU_BACKEND=vulkan\n\
-export RUST_LOG=wgpu=info\n\
-export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json\n\
 startxfce4 &' > /home/ai/.vnc/xstartup && \
     chmod +x /home/ai/.vnc/xstartup
 
-# Desktop entry with GPU settings
-RUN mkdir -p /home/ai/Desktop && \
+# Desktop shortcut
+RUN mkdir -p /home/ai/Desktop /home/ai/.config/autostart && \
     echo '[Desktop Entry]\n\
 Version=1.0\n\
 Type=Application\n\
-Name=RapidRAW (GPU Accelerated)\n\
-Comment=RAW Photo Editor with CUDA\n\
-Exec=env WGPU_BACKEND=vulkan VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json /usr/local/bin/rapidraw\n\
+Name=RapidRAW\n\
+Comment=GPU-Accelerated RAW Photo Editor\n\
+Exec=/usr/local/bin/rapidraw\n\
 Path=/home/ai/Pictures\n\
 Icon=applications-graphics\n\
 Terminal=false\n\
 Categories=Graphics;Photography;' > /home/ai/Desktop/RapidRAW.desktop && \
-    chmod +x /home/ai/Desktop/RapidRAW.desktop
-
-# Autostart with GPU
-RUN mkdir -p /home/ai/.config/autostart && \
+    chmod +x /home/ai/Desktop/RapidRAW.desktop && \
     cp /home/ai/Desktop/RapidRAW.desktop /home/ai/.config/autostart/
 
+# Switch back to root for supervisor
 USER root
 
-# Supervisor configuration with GPU environment
+# Single supervisor configuration - embedded in Dockerfile
 RUN echo '[supervisord]\n\
 nodaemon=true\n\
 user=root\n\
 logfile=/var/log/supervisor/supervisord.log\n\
+pidfile=/var/run/supervisord.pid\n\
+childlogdir=/var/log/supervisor\n\
 \n\
-[program:vnc]\n\
-command=/bin/bash -c "sudo -u ai -E vncserver -kill :1 > /dev/null 2>&1 || true; sudo -u ai -E vncserver :1 -geometry 1920x1080 -depth 24 -SecurityTypes None -localhost no"\n\
+[program:xvnc]\n\
+command=/bin/sh -c "rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null; exec sudo -u ai /usr/bin/vncserver :1 -geometry 1920x1080 -depth 24 -SecurityTypes None -localhost no -fg"\n\
 autorestart=true\n\
 user=root\n\
 priority=100\n\
-stdout_logfile=/var/log/supervisor/vnc.log\n\
-stderr_logfile=/var/log/supervisor/vnc.error.log\n\
-environment=USER="ai",HOME="/home/ai",DISPLAY=":1",NVIDIA_VISIBLE_DEVICES="all",NVIDIA_DRIVER_CAPABILITIES="all"\n\
+stdout_logfile=/var/log/supervisor/xvnc.out.log\n\
+stderr_logfile=/var/log/supervisor/xvnc.err.log\n\
+environment=USER="ai",HOME="/home/ai"\n\
 \n\
-[program:novnc]\n\
-command=/bin/bash -c "websockify --web=/usr/share/novnc/ 6080 localhost:5901"\n\
+[program:websockify]\n\
+command=/bin/sh -c "sleep 5 && websockify --web=/usr/share/novnc/ 6080 localhost:5901"\n\
 autorestart=true\n\
 user=root\n\
 priority=200\n\
-stdout_logfile=/var/log/supervisor/novnc.log\n\
-stderr_logfile=/var/log/supervisor/novnc.error.log\n\
-\n\
-[program:nvidia-persistenced]\n\
-command=nvidia-persistenced --user ai\n\
-autorestart=true\n\
-user=root\n\
-priority=50\n\
-stdout_logfile=/var/log/supervisor/nvidia.log\n\
-stderr_logfile=/var/log/supervisor/nvidia.error.log' > /etc/supervisor/conf.d/rapidraw.conf
+stdout_logfile=/var/log/supervisor/websockify.out.log\n\
+stderr_logfile=/var/log/supervisor/websockify.err.log' > /etc/supervisor/conf.d/rapidraw.conf
 
-# Performance startup script
+# Startup script
 RUN echo '#!/bin/bash\n\
-set -e\n\
+echo "Starting RapidRAW CUDA Remote Desktop..."\n\
 \n\
-echo "🚀 RapidRAW CUDA-ACCELERATED MODE 🚀"\n\
-echo "Jetson AGX Orin - CUDA 12.8 - Ampere GPU"\n\
-\n\
-# Set GPU to max performance\n\
-nvidia-smi -pm 1 2>/dev/null || true\n\
-nvidia-smi -ac 9001,1875 2>/dev/null || true\n\
-\n\
-# Ensure permissions\n\
+# Ensure correct permissions\n\
 chown -R ai:ai /home/ai\n\
+chmod -R 755 /home/ai/.vnc\n\
 \n\
-# GPU info\n\
-echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits 2>/dev/null || echo Available)"\n\
-echo "CUDA: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits 2>/dev/null || echo 12.8)"\n\
-echo "VRAM: $(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || echo Available) MB"\n\
-echo ""\n\
+# Clean any stale locks\n\
+rm -rf /tmp/.X*-lock /tmp/.X11-unix/* 2>/dev/null\n\
 \n\
+# Start supervisor\n\
 exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf' > /start.sh && \
     chmod +x /start.sh
 
-# Environment for maximum GPU performance
+# Environment variables
 ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=all \
-    CUDA_VISIBLE_DEVICES=0 \
     WGPU_BACKEND=vulkan \
-    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
-    __NV_PRIME_RENDER_OFFLOAD=1 \
-    __GLX_VENDOR_LIBRARY_NAME=nvidia \
-    CUDA_CACHE_DISABLE=0 \
-    CUDA_MODULE_LOADING=EAGER \
     USER=ai \
     HOME=/home/ai \
     DISPLAY=:1
 
-# Create sample info
-RUN echo "# RapidRAW GPU-Accelerated Pictures Directory\n\n\
-This directory is optimized for GPU-accelerated RAW processing.\n\
-\n\
-Performance Tips:\n\
-- CUDA acceleration is enabled for image processing\n\
-- Multiple images can be processed in parallel\n\
-- GPU memory is shared with system (64GB total)\n\
-\n\
-Monitor GPU usage:\n\
-- Open terminal and run: nvidia-smi\n\
-- Or run: nvtop\n" > /home/ai/Pictures/README.md && \
-    chown ai:ai /home/ai/Pictures/README.md
-
+# Ports
 EXPOSE 5901 6080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
-    CMD netstat -tlnp | grep -q ':6080' || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:6080/ || exit 1
 
+# Start
 CMD ["/start.sh"]
