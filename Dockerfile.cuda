@@ -96,10 +96,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create user
-RUN useradd -m -s /bin/bash -G sudo,video,render ai && \
+# Create user with necessary groups (create render group if it doesn't exist)
+RUN groupadd -f render && \
+    useradd -m -s /bin/bash -G sudo,video ai && \
     echo "ai:ai" | chpasswd && \
-    echo "ai ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+    echo "ai ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    usermod -a -G render ai 2>/dev/null || true
 
 # Create directories
 RUN mkdir -p /home/ai/Pictures /home/ai/.vnc /var/log/supervisor && \
