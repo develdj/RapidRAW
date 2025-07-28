@@ -69,6 +69,7 @@ RUN apt-get update && \
     # VNC Server
     tigervnc-standalone-server \
     tigervnc-common \
+    tigervnc-xorg-extension \
     # Web-based VNC client
     novnc \
     websockify \
@@ -78,89 +79,138 @@ RUN apt-get update && \
     wget \
     curl \
     nano \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user for better compatibility
+RUN useradd -m -s /bin/bash -G sudo ai && \
+    echo "ai:ai" | chpasswd && \
+    echo "ai ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Create Pictures directory for the ai user
+RUN mkdir -p /home/ai/Pictures && \
+    chown -R ai:ai /home/ai/Pictures
 
 # Copy RapidRAW binary from builder stage
 COPY --from=builder /app/src-tauri/target/aarch64-unknown-linux-gnu/release/RapidRAW /usr/local/bin/rapidraw
 RUN chmod +x /usr/local/bin/rapidraw
 
-# Set up VNC password (you can change this)
-RUN mkdir -p /root/.vnc && \
-    echo "rapidraw" | vncpasswd -f > /root/.vnc/passwd && \
-    chmod 600 /root/.vnc/passwd
+# Switch to ai user for VNC setup
+USER ai
+WORKDIR /home/ai
 
-# Create VNC startup script
-RUN echo '#!/bin/bash\n\
-# Start VNC server with XFCE desktop\n\
-vncserver -kill :1 || true\n\
-rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1\n\
-vncserver :1 -geometry 1920x1080 -depth 24 -localhost no' > /root/start-vnc.sh && \
-    chmod +x /root/start-vnc.sh
+# Set up VNC without password for noVNC (authentication handled by web interface)
+RUN mkdir -p /home/ai/.vnc && \
+    touch /home/ai/.vnc/passwd && \
+    chmod 600 /home/ai/.vnc/passwd
+
+# Create VNC config to disable authentication for localhost connections
+RUN echo "SecurityTypes=None" > /home/ai/.vnc/config && \
+    echo "localhost" >> /home/ai/.vnc/config
 
 # Create XFCE startup configuration
-RUN mkdir -p /root/.vnc && \
-    echo '#!/bin/bash\n\
-unset SESSION_MANAGER\n\
-unset DBUS_SESSION_BUS_ADDRESS\n\
-# Start XFCE desktop\n\
-startxfce4 &\n\
-# Wait for desktop to start\n\
-sleep 5\n\
-# Start RapidRAW automatically\n\
-/usr/local/bin/rapidraw &' > /root/.vnc/xstartup && \
-    chmod +x /root/.vnc/xstartup
+RUN echo '#!/bin/bash\n\
+xrdb $HOME/.Xresources\n\
+xsetroot -solid grey\n\
+# Fix for authentication issues\n\
+export XKL_XMODMAP_DISABLE=1\n\
+export QT_X11_NO_MITSHM=1\n\
+# Start XFCE\n\
+startxfce4 &' > /home/ai/.vnc/xstartup && \
+    chmod +x /home/ai/.vnc/xstartup
 
-# Setup supervisor configuration for all services
-RUN echo '[supervisord]\n\
-nodaemon=true\n\
-logfile=/var/log/supervisor/supervisord.log\n\
-\n\
-[program:vnc]\n\
-command=/root/start-vnc.sh\n\
-autorestart=true\n\
-user=root\n\
-priority=100\n\
-stderr_logfile=/var/log/supervisor/vnc.err.log\n\
-stdout_logfile=/var/log/supervisor/vnc.out.log\n\
-\n\
-[program:novnc]\n\
-command=/usr/share/novnc/utils/novnc_proxy --vnc localhost:5901 --listen 6080\n\
-autorestart=true\n\
-user=root\n\
-priority=200\n\
-stderr_logfile=/var/log/supervisor/novnc.err.log\n\
-stdout_logfile=/var/log/supervisor/novnc.out.log' > /etc/supervisor/conf.d/remote-desktop.conf
-
-# Create a desktop entry for RapidRAW
-RUN mkdir -p /root/Desktop && \
+# Create desktop shortcuts
+RUN mkdir -p /home/ai/Desktop && \
     echo '[Desktop Entry]\n\
 Version=1.0\n\
 Type=Application\n\
 Name=RapidRAW\n\
 Comment=RAW Photo Editor\n\
 Exec=/usr/local/bin/rapidraw\n\
+Path=/home/ai/Pictures\n\
 Icon=applications-graphics\n\
 Terminal=false\n\
-Categories=Graphics;Photography;' > /root/Desktop/RapidRAW.desktop && \
-    chmod +x /root/Desktop/RapidRAW.desktop
+Categories=Graphics;Photography;' > /home/ai/Desktop/RapidRAW.desktop && \
+    chmod +x /home/ai/Desktop/RapidRAW.desktop
+
+# Create autostart entry for RapidRAW
+RUN mkdir -p /home/ai/.config/autostart && \
+    cp /home/ai/Desktop/RapidRAW.desktop /home/ai/.config/autostart/
+
+# Switch back to root for supervisor
+USER root
+
+# Create supervisor configuration
+RUN mkdir -p /var/log/supervisor && \
+    echo '[supervisord]\n\
+nodaemon=true\n\
+user=root\n\
+logfile=/var/log/supervisor/supervisord.log\n\
+pidfile=/var/run/supervisord.pid\n\
+\n\
+[program:vnc]\n\
+command=/bin/bash -c "sudo -u ai vncserver -kill :1 > /dev/null 2>&1 || true; sudo -u ai vncserver :1 -geometry 1920x1080 -depth 24 -SecurityTypes None -localhost no"\n\
+autorestart=true\n\
+user=root\n\
+priority=100\n\
+stdout_logfile=/var/log/supervisor/vnc.log\n\
+stderr_logfile=/var/log/supervisor/vnc.error.log\n\
+environment=USER="ai",HOME="/home/ai"\n\
+\n\
+[program:novnc]\n\
+command=/bin/bash -c "websockify --web=/usr/share/novnc/ --cert=/home/ai/novnc.pem 6080 localhost:5901"\n\
+autorestart=true\n\
+user=root\n\
+priority=200\n\
+stdout_logfile=/var/log/supervisor/novnc.log\n\
+stderr_logfile=/var/log/supervisor/novnc.error.log' > /etc/supervisor/conf.d/rapidraw.conf
+
+# Generate a self-signed certificate for websockify (optional but recommended)
+RUN openssl req -new -x509 -days 365 -nodes \
+    -out /home/ai/novnc.pem -keyout /home/ai/novnc.pem \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost" && \
+    chown ai:ai /home/ai/novnc.pem
+
+# Create a wrapper script to ensure proper environment
+RUN echo '#!/bin/bash\n\
+# Ensure VNC directory exists\n\
+mkdir -p /home/ai/.vnc\n\
+chown -R ai:ai /home/ai\n\
+# Start supervisor\n\
+exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf' > /start.sh && \
+    chmod +x /start.sh
 
 # Expose ports
-# 5901 - VNC direct access
-# 6080 - noVNC web access
 EXPOSE 5901 6080
 
 # Set environment variables
-ENV USER=root \
+ENV USER=ai \
+    HOME=/home/ai \
     DISPLAY=:1 \
     VNC_RESOLUTION=1920x1080 \
-    VNC_COL_DEPTH=24
+    VNC_COL_DEPTH=24 \
+    NOVNC_ENABLE=1 \
+    LANG=en_US.UTF-8 \
+    LANGUAGE=en_US.UTF-8 \
+    LC_ALL=C.UTF-8
 
-# Add a healthcheck
+# Create sample images directory with a README
+RUN echo "# RapidRAW Pictures Directory\n\n\
+This is the default directory for RapidRAW.\n\
+Place your RAW images here to edit them.\n\n\
+Supported formats include:\n\
+- Canon: .CR2, .CR3, .CRW\n\
+- Nikon: .NEF, .NRW\n\
+- Sony: .ARW, .SRF, .SR2\n\
+- And many more RAW formats\n" > /home/ai/Pictures/README.md && \
+    chown ai:ai /home/ai/Pictures/README.md
+
+# Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:6080/ || exit 1
+    CMD netstat -tlnp | grep -q ':6080' || exit 1
 
-# Start supervisor
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"] XFCE desktop\n\
+# Start everything
+CMD ["/start.sh"] XFCE desktop\n\
 startxfce4 &\n\
 # Wait for desktop to start\n\
 sleep 5\n\
