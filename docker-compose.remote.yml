@@ -15,16 +15,21 @@ services:
     environment:
       - VNC_RESOLUTION=1920x1080
       - VNC_COL_DEPTH=24
-      - VNC_PASSWORD=rapidraw
-    # For GPU acceleration on Jetson (optional - remove if causes issues)
+      # No password needed for noVNC with this setup
+      - VNC_PW=no
+    # For GPU acceleration on Jetson (optional - uncomment if needed)
     # runtime: nvidia
     # devices:
     #   - /dev/dri:/dev/dri
     # Better performance
     shm_size: '2gb'
-    # Store desktop settings persistently
+    # Persistent storage
     volumes:
-      - rapidraw-desktop:/root
+      # Store desktop settings and user data
+      - rapidraw-home:/home/ai
+      # Mount a host directory for pictures (change the host path as needed)
+      # Uncomment and modify the line below to use a specific host directory
+      # - /path/to/your/pictures:/home/ai/Pictures
     # Resource limits (adjust based on your system)
     deploy:
       resources:
@@ -36,5 +41,5 @@ services:
           memory: 2G
 
 volumes:
-  rapidraw-desktop:
+  rapidraw-home:
     driver: local
